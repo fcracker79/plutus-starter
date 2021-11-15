@@ -43,6 +43,8 @@ library
     exposed-modules:
       MyModule
       Plutus.Contracts.Game
+      Plutus.Contracts.Hello,
+      Plutus.Contracts.AlwaysSucceed
     build-depends:
       base >= 4.9 && < 5,
       aeson,
@@ -54,7 +56,35 @@ library
       plutus-tx-plugin,
       plutus-tx,
       plutus-ledger,
+      plutus-ledger-api,
+      text,
+      serialise,
+      cardano-api
     hs-source-dirs: src examples/src
+
+executable contract-always-succeed
+  import: lang
+  hs-source-dirs:       examples/src
+  main-is:              contracts/alwayssucceed/Main.hs
+  other-modules:
+    Plutus.Contracts.AlwaysSucceed
+  ghc-options:          -threaded -rtsopts "-with-rtsopts=-T"
+  build-depends:
+    base >= 4.9 && < 5,
+    aeson,
+    bytestring,
+    containers,
+    freer-extras,
+    playground-common,
+    plutus-contract,
+    plutus-tx-plugin,
+    plutus-tx,
+    plutus-ledger,
+    plutus-ledger-api,
+    text,
+    serialise,
+    cardano-api,
+    cardano-ledger-alonzo
 
 test-suite plutus-example-projects-test
   import: lang
