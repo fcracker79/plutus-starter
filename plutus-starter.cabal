@@ -86,6 +86,30 @@ executable contract-always-succeed
     cardano-api,
     cardano-ledger-alonzo
 
+executable contract-auction
+  import: lang
+  hs-source-dirs:       examples/src
+  main-is:              contracts/auction/Main.hs
+  other-modules:
+    Plutus.Contracts.EnglishAuction
+  ghc-options:          -threaded -rtsopts "-with-rtsopts=-T"
+  build-depends:
+    base >= 4.9 && < 5,
+    aeson,
+    bytestring,
+    containers,
+    freer-extras,
+    playground-common,
+    plutus-contract,
+    plutus-tx-plugin,
+    plutus-tx,
+    plutus-ledger,
+    plutus-ledger-api,
+    text,
+    serialise,
+    cardano-api,
+    cardano-ledger-alonzo
+
 test-suite plutus-example-projects-test
   import: lang
   type: exitcode-stdio-1.0
