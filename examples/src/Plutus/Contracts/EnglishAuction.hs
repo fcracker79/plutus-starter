@@ -70,6 +70,9 @@ PlutusTx.makeLift ''Auction
 fromRight :: Either a b -> b
 fromRight (Right b) = b
 
+fromJust :: Maybe a -> a
+fromJust (Just x) = x
+
 
 data Bid = Bid
     { bBidder :: !PubKeyHash
@@ -295,7 +298,7 @@ bid BidParams{..} = do
 
         lookups = Constraints.typedValidatorLookups auctionTypedValidator <>
                   Constraints.otherScript auctionValidator                <>
-                  Constraints.unspentOutputs (Map.singleton oref o)
+                  Constraints.unspentOutputs (Map.singleton oref (fromJust (fromTxOut (txOutTxOut o))))
         tx      = case adHighestBid of
                     Nothing      -> mustPayToTheScript d' v                            <>
                                     mustValidateIn (to $ aDeadline adAuction)          <>
@@ -305,7 +308,7 @@ bid BidParams{..} = do
                                     mustValidateIn (to $ aDeadline adAuction)          <>
                                     mustSpendScriptOutput oref r
     ledgerTx <- submitTxConstraintsWith lookups tx
-    void $ awaitTxConfirmed $ txId ledgerTx
+    void $ awaitTxConfirmed $ txId (fromRight ledgerTx)
     logInfo @String $ printf "made bid of %d lovelace in auction %s for token (%s, %s)"
         bpBid
         (show adAuction)
@@ -318,12 +321,13 @@ close CloseParams{..} = do
     logInfo @String $ printf "found auction utxo with datum %s" (show d)
 
     let t      = Value.singleton cpCurrency cpToken 1
-        r      = Redeemer $ PlutusTx.toData Close
+        yy     = PlutusTx.toData Close
+        r      = Redeemer $ BuiltinData yy
         seller = aSeller adAuction
 
         lookups = Constraints.typedValidatorLookups auctionTypedValidator <>
                   Constraints.otherScript auctionValidator                <>
-                  Constraints.unspentOutputs (Map.singleton oref o)
+                  Constraints.unspentOutputs (Map.singleton oref (fromJust (fromTxOut (txOutTxOut o))))
         tx      = case adHighestBid of
                     Nothing      -> mustPayToPubKey seller t                          <>
                                     mustValidateIn (from $ aDeadline adAuction)       <>
@@ -333,25 +337,36 @@ close CloseParams{..} = do
                                     mustValidateIn (from $ aDeadline adAuction)       <>
                                     mustSpendScriptOutput oref r
     ledgerTx <- submitTxConstraintsWith lookups tx
-    void $ awaitTxConfirmed $ txId ledgerTx
+    void $ awaitTxConfirmed $ txId (fromRight ledgerTx)
     logInfo @String $ printf "closed auction %s for token (%s, %s)"
         (show adAuction)
         (show cpCurrency)
         (show cpToken)
 
+
+startEndpoint :: Promise () AuctionSchema Text ()
+startEndpoint = endpoint @"start" @StartParams start
+
+bidEndpoint :: Promise () AuctionSchema Text ()
+bidEndpoint = endpoint @"bid" @BidParams bid
+
+closeEndpoint :: Promise () AuctionSchema Text ()
+closeEndpoint = endpoint @"close" @CloseParams close
+
+
 findAuction :: CurrencySymbol -> TokenName -> Contract w s Text (TxOutRef, TxOutTx, AuctionDatum)
 findAuction cs tn = do
-    utxos <- utxoAt $ scriptAddress auctionValidator
+    utxos <- utxosAt $ scriptAddress auctionValidator
     let xs = [ (oref, o)
              | (oref, o) <- Map.toList utxos
-             , Value.valueOf (txOutValue $ txOutTxOut o) cs tn == 1
+             , Value.valueOf (txOutValue (toTxOut o)) cs tn == 1
              ]
     case xs of
-        [(oref, o)] -> case txOutDatumHash $ txOutTxOut o of
+        [(oref, o)] -> case txOutDatumHash (toTxOut o) of
             Nothing   -> throwError "unexpected out type"
-            Just h -> case Map.lookup h $ txData $ txOutTxTx o of
+            Just h -> case Map.lookup h $ txData $ txOutTxTx (txOutRefId oref) of
                 Nothing        -> throwError "datum not found"
-                Just (Datum e) -> case PlutusTx.fromData e of
+                Just (Datum (BuiltinData e)) -> case PlutusTx.fromData e of
                     Nothing -> throwError "datum has wrong type"
                     Just d@AuctionDatum{..}
                         | aCurrency adAuction == cs && aToken adAuction == tn -> return (oref, o, d)
@@ -359,11 +374,7 @@ findAuction cs tn = do
         _           -> throwError "auction utxo not found"
 
 endpoints :: Contract () AuctionSchema Text ()
-endpoints = (start' `select` bid' `select` close') >> endpoints
-  where
-    start' = endpoint @"start" >>= start
-    bid'   = endpoint @"bid"   >>= bid
-    close' = endpoint @"close" >>= close
+endpoints = selectList [startEndpoint, bidEndpoint, closeEndpoint] >> endpoints
 
 mkSchemaDefinitions ''AuctionSchema
 
