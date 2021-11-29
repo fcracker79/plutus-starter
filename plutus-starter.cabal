@@ -108,8 +108,9 @@ executable contract-auction
     text,
     serialise,
     cardano-api,
-    cardano-ledger-alonzo
-
+    cardano-ledger-alonzo,
+    plutus-chain-index
+    
 test-suite plutus-example-projects-test
   import: lang
   type: exitcode-stdio-1.0

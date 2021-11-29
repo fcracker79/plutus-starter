@@ -19,6 +19,7 @@
 
 module Plutus.Contracts.EnglishAuction where
 
+import Plutus.ChainIndex.Tx (ChainIndexTx(..))
 import PlutusTx.Builtins.Internal(BuiltinData(..))
 import           Codec.Serialise
 import qualified Plutus.V1.Ledger.Scripts as Plutus
@@ -48,6 +49,7 @@ import qualified Data.ByteString.Lazy as LBS
 import qualified Data.ByteString.Short as SBS
 import           Cardano.Api.Shelley (PlutusScript (..), PlutusScriptV1)
 
+
 data Auction = Auction
     { aSeller   :: !PubKeyHash
     , aDeadline :: !POSIXTime
@@ -72,7 +74,6 @@ fromRight (Right b) = b
 
 fromJust :: Maybe a -> a
 fromJust (Just x) = x
-
 
 data Bid = Bid
     { bBidder :: !PubKeyHash
@@ -234,7 +235,6 @@ auctionScriptShortBs = SBS.toShort . LBS.toStrict $ serialise script
 auctionScript :: PlutusScript PlutusScriptV1
 auctionScript = PlutusScriptSerialised auctionScriptShortBs
 
-
 auctionAddress :: Ledger.ValidatorHash
 auctionAddress = Scripts.validatorHash auctionValidator
 
@@ -298,7 +298,7 @@ bid BidParams{..} = do
 
         lookups = Constraints.typedValidatorLookups auctionTypedValidator <>
                   Constraints.otherScript auctionValidator                <>
-                  Constraints.unspentOutputs (Map.singleton oref (fromJust (fromTxOut (txOutTxOut o))))
+                  Constraints.unspentOutputs (Map.singleton oref o)
         tx      = case adHighestBid of
                     Nothing      -> mustPayToTheScript d' v                            <>
                                     mustValidateIn (to $ aDeadline adAuction)          <>
@@ -327,7 +327,7 @@ close CloseParams{..} = do
 
         lookups = Constraints.typedValidatorLookups auctionTypedValidator <>
                   Constraints.otherScript auctionValidator                <>
-                  Constraints.unspentOutputs (Map.singleton oref (fromJust (fromTxOut (txOutTxOut o))))
+                  Constraints.unspentOutputs (Map.singleton oref o)
         tx      = case adHighestBid of
                     Nothing      -> mustPayToPubKey seller t                          <>
                                     mustValidateIn (from $ aDeadline adAuction)       <>
@@ -343,7 +343,6 @@ close CloseParams{..} = do
         (show cpCurrency)
         (show cpToken)
 
-
 startEndpoint :: Promise () AuctionSchema Text ()
 startEndpoint = endpoint @"start" @StartParams start
 
@@ -353,28 +352,32 @@ bidEndpoint = endpoint @"bid" @BidParams bid
 closeEndpoint :: Promise () AuctionSchema Text ()
 closeEndpoint = endpoint @"close" @CloseParams close
 
-
-findAuction :: CurrencySymbol -> TokenName -> Contract w s Text (TxOutRef, TxOutTx, AuctionDatum)
+findAuction :: CurrencySymbol -> TokenName -> Contract w s Text (TxOutRef, ChainIndexTxOut, AuctionDatum)
 findAuction cs tn = do
-    utxos <- utxosAt $ scriptAddress auctionValidator
+    utxos <- utxosTxOutTxAt $ scriptAddress auctionValidator
     let xs = [ (oref, o)
-             | (oref, o) <- Map.toList utxos
-             , Value.valueOf (txOutValue (toTxOut o)) cs tn == 1
+             | (oref, o@(to, tx)) <- Map.toList utxos
+             , Value.valueOf (getValue to) cs tn == 1
              ]
     case xs of
-        [(oref, o)] -> case txOutDatumHash (toTxOut o) of
+        [(oref, (to, ChainIndexTx{..}))] -> case txOutDatumHash (toTxOut to) of
             Nothing   -> throwError "unexpected out type"
-            Just h -> case Map.lookup h $ txData $ txOutTxTx (txOutRefId oref) of
+            Just h -> case Map.lookup h _citxData of
                 Nothing        -> throwError "datum not found"
                 Just (Datum (BuiltinData e)) -> case PlutusTx.fromData e of
                     Nothing -> throwError "datum has wrong type"
                     Just d@AuctionDatum{..}
-                        | aCurrency adAuction == cs && aToken adAuction == tn -> return (oref, o, d)
+                        | aCurrency adAuction == cs && aToken adAuction == tn -> return (oref, to, d)
                         | otherwise                                           -> throwError "auction token missmatch"
         _           -> throwError "auction utxo not found"
+  where
+    getValue :: ChainIndexTxOut -> Value
+    getValue PublicKeyChainIndexTxOut{..} = _ciTxOutValue
+    getValue ScriptChainIndexTxOut{..} = _ciTxOutValue
 
 endpoints :: Contract () AuctionSchema Text ()
 endpoints = selectList [startEndpoint, bidEndpoint, closeEndpoint] >> endpoints
+
 
 mkSchemaDefinitions ''AuctionSchema
 
